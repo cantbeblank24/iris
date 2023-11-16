@@ -27,7 +27,7 @@ class Message:
 
 
 def child_env(child_id: int, env_fn: Callable, child_conn: Connection) -> None:
-    np.random.seed(child_id + np.random.randint(0, 2 ** 31 - 1))
+    np.random.seed(child_id + np.random.randint(0, 2**31 - 1))
     env = env_fn()
     while True:
         message_type, content = child_conn.recv()
@@ -47,7 +47,9 @@ def child_env(child_id: int, env_fn: Callable, child_conn: Connection) -> None:
 
 
 class MultiProcessEnv(DoneTrackerEnv):
-    def __init__(self, env_fn: Callable, num_envs: int, should_wait_num_envs_ratio: float) -> None:
+    def __init__(
+        self, env_fn: Callable, num_envs: int, should_wait_num_envs_ratio: float
+    ) -> None:
         super().__init__(num_envs)
         self.num_actions = env_fn().env.action_space.n
         self.should_wait_num_envs_ratio = should_wait_num_envs_ratio
@@ -55,7 +57,9 @@ class MultiProcessEnv(DoneTrackerEnv):
         for child_id in range(num_envs):
             parent_conn, child_conn = Pipe()
             self.parent_conns.append(parent_conn)
-            p = Process(target=child_env, args=(child_id, env_fn, child_conn), daemon=True)
+            p = Process(
+                target=child_env, args=(child_id, env_fn, child_conn), daemon=True
+            )
             self.processes.append(p)
         for p in self.processes:
             p.start()
@@ -76,7 +80,9 @@ class MultiProcessEnv(DoneTrackerEnv):
         content = self._receive(check_type=MessageType.RESET_RETURN)
         return np.stack(content)
 
-    def step(self, actions: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Any]:
+    def step(
+        self, actions: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Any]:
         for parent_conn, action in zip(self.parent_conns, actions):
             parent_conn.send(Message(MessageType.STEP, action))
         content = self._receive(check_type=MessageType.STEP_RETURN)

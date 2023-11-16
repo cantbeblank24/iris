@@ -13,17 +13,23 @@ class EpisodeReplayEnv:
         _, self.action_names = get_keymap_and_action_names(replay_keymap_name)
         assert episode_dir.is_dir()
         self._paths = {}
-        for mode in ['train', 'test', 'imagination']:
+        for mode in ["train", "test", "imagination"]:
             directory = episode_dir / mode
             if directory.is_dir():
-                self._paths[mode] = sorted([p for p in directory.iterdir() if 'episode_' in p.stem and p.suffix == '.pt'])
-                print(f'Found {len(self._paths[mode])} {mode} episodes.')
+                self._paths[mode] = sorted(
+                    [
+                        p
+                        for p in directory.iterdir()
+                        if "episode_" in p.stem and p.suffix == ".pt"
+                    ]
+                )
+                print(f"Found {len(self._paths[mode])} {mode} episodes.")
             else:
-                print(f'No {mode} episodes.')
+                print(f"No {mode} episodes.")
 
         self._t, self._episode = None, None
         self._ep_idx = 0
-        self._mode = 'train'
+        self._mode = "train"
         self.load()
 
     def load(self):
@@ -39,13 +45,13 @@ class EpisodeReplayEnv:
         self.load()
 
     def set_mode(self, mode):
-        assert mode in ['train', 'test', 'imagination']
+        assert mode in ["train", "test", "imagination"]
         if mode in self._paths:
             self._mode = mode
             self._ep_idx = 0
             self.load()
         else:
-            print(f'No {mode} episodes.')
+            print(f"No {mode} episodes.")
 
     def __len__(self):
         return len(self.ends)
@@ -89,19 +95,19 @@ class EpisodeReplayEnv:
         elif action == 7:
             self.load_next()
         elif action == 8:
-            self.set_mode('train')
+            self.set_mode("train")
         elif action == 9:
-            self.set_mode('test')
+            self.set_mode("test")
         elif action == 10:
-            self.set_mode('imagination')
+            self.set_mode("imagination")
         act = self.actions[self._t]
         reward = self.rewards[self._t].item()
         done = self.ends[self._t].item()
         info = {
-            'ep_name': f'[{self._mode}] {self.paths[self._ep_idx].stem}',
-            'timestep': self._t,
-            'action': self.action_names[act],
-            'cum_reward': f'{sum(self.rewards[:self._t + 1]):.3f}'
+            "ep_name": f"[{self._mode}] {self.paths[self._ep_idx].stem}",
+            "timestep": self._t,
+            "action": self.action_names[act],
+            "cum_reward": f"{sum(self.rewards[:self._t + 1]):.3f}",
         }
         return self.observations[self._t], reward, done, info
 
