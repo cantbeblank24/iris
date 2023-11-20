@@ -20,7 +20,7 @@ from envs import SingleProcessEnv, MultiProcessEnv
 from episode import Episode
 from make_reconstructions import make_reconstructions_from_batch
 from models.actor_critic import ActorCritic
-from models.world_model import WorldModel
+from models.world_model import WorldModel, EpisodeSplitter
 from utils import configure_optimizer, EpisodeDirManager, set_seed
 
 
@@ -100,10 +100,13 @@ class Trainer:
         assert self.cfg.training.should or self.cfg.evaluation.should
         env = train_env if self.cfg.training.should else test_env
 
+        self.episode_splitter = EpisodeSplitter(env.num_actions)
+
         tokenizer = instantiate(cfg.tokenizer)
+
         world_model = WorldModel(
             obs_vocab_size=tokenizer.vocab_size,
-            act_vocab_size=env.num_actions,
+            act_vocab_size=self.episode_splitter.vocab_size,
             config=instantiate(cfg.world_model),
         )
         actor_critic = ActorCritic(**cfg.actor_critic, act_vocab_size=env.num_actions)
@@ -188,12 +191,16 @@ class Trainer:
         self.agent.tokenizer.eval()
 
         if epoch > cfg_world_model.start_after_epochs:
+            if self.episode_splitter.mappings is None:
+                self.episode_splitter.init_mappings(self.train_dataset)
+
             metrics_world_model = self.train_component(
                 self.agent.world_model,
                 self.optimizer_world_model,
                 sequence_length=self.cfg.common.sequence_length,
                 sample_from_start=True,
                 tokenizer=self.agent.tokenizer,
+                splitter=self.episode_splitter,
                 **cfg_world_model,
             )
         self.agent.world_model.eval()
@@ -229,6 +236,7 @@ class Trainer:
         max_grad_norm: Optional[float],
         sequence_length: int,
         sample_from_start: bool,
+        splitter: EpisodeSplitter,
         **kwargs_loss: Any,
     ) -> Dict[str, float]:
         loss_total_epoch = 0.0
@@ -240,8 +248,10 @@ class Trainer:
             optimizer.zero_grad()
             for _ in range(grad_acc_steps):
                 batch = self.train_dataset.sample_batch(
-                    batch_num_samples, sequence_length, sample_from_start
+                    batch_num_samples, 3 * sequence_length, sample_from_start
                 )
+                batch = splitter(batch, sequence_length)
+
                 batch = self._to_device(batch)
 
                 losses = component.compute_loss(batch, **kwargs_loss) / grad_acc_steps
@@ -286,6 +296,7 @@ class Trainer:
                 cfg_world_model.batch_num_samples,
                 sequence_length=self.cfg.common.sequence_length,
                 tokenizer=self.agent.tokenizer,
+                splitter=self.episode_splitter,
             )
 
         if epoch > cfg_actor_critic.start_after_epochs:
@@ -312,6 +323,7 @@ class Trainer:
         component: nn.Module,
         batch_num_samples: int,
         sequence_length: int,
+        splitter: EpisodeSplitter,
         **kwargs_loss: Any,
     ) -> Dict[str, float]:
         loss_total_epoch = 0.0
@@ -319,7 +331,9 @@ class Trainer:
 
         steps = 0
         pbar = tqdm(desc=f"Evaluating {str(component)}", file=sys.stdout)
-        for batch in self.test_dataset.traverse(batch_num_samples, sequence_length):
+        for batch in self.test_dataset.traverse(batch_num_samples, 3 * sequence_length):
+            batch = splitter(batch, sequence_length)
+
             batch = self._to_device(batch)
 
             losses = component.compute_loss(batch, **kwargs_loss)

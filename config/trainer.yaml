@@ -18,11 +18,11 @@ wandb:
 initialization:
   path_to_checkpoint: /home/streichg/eth/dl/iris/checkpoints/last.pt
   load_tokenizer: True
-  load_world_model: True
+  load_world_model: False
   load_actor_critic: True
 
 common:
-  epochs: 150
+  epochs: 100
   device: cuda:0
   do_checkpoint: True
   seed: 0
@@ -60,8 +60,8 @@ training:
     start_after_epochs: 600
     steps_per_epoch: 200
   world_model:
-    batch_num_samples: 16
-    grad_acc_steps: 4
+    batch_num_samples: 32
+    grad_acc_steps: 2
     max_grad_norm: 10.0
     weight_decay: 0.01
     start_after_epochs: 50
@@ -80,7 +80,7 @@ training:
 
 evaluation:
   should: True
-  every: 5
+  every: 10
   tokenizer:
     batch_num_samples: ${training.tokenizer.batch_num_samples}
     start_after_epochs: ${training.tokenizer.start_after_epochs}

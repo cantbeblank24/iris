@@ -42,7 +42,7 @@ class Collector:
         num_steps: Optional[int] = None,
         num_episodes: Optional[int] = None,
     ):
-        assert self.env.num_actions == agent.world_model.act_vocab_size
+        # assert self.env.num_actions == agent.world_model.act_vocab_size
         assert 0 <= epsilon <= 1
 
         assert (num_steps is None) != (num_episodes is None)

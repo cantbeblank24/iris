@@ -1,10 +1,13 @@
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
+import re
 
 from einops import rearrange
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+import numpy as np
 
 from dataset import Batch
 from .kv_caching import KeysValues
@@ -13,6 +16,93 @@ from .tokenizer import Tokenizer
 from .transformer import Transformer, TransformerConfig
 from utils import init_weights, LossWithIntermediateLosses
 
+
+class EpisodeSplitter:
+    def __init__(self, orig_vocab_size: int, vocab_size: int = None):
+        self.orig_vocab_size = orig_vocab_size
+        self.vocab_size = vocab_size if vocab_size is not None else 2 * orig_vocab_size
+
+    def init_mappings(self, dataset):
+        episodes = [
+            batch['actions'].squeeze().numpy().astype(np.ubyte)
+            for batch in dataset.traverse(1, 32)
+        ]
+
+        original_lengths = [len(episode) for episode in episodes]
+
+        self.mappings = [bytes([i]) for i in range(self.orig_vocab_size)]
+        self.pattern_length = [1 for _ in range(self.orig_vocab_size)]
+
+        for i in range(self.orig_vocab_size, self.vocab_size):
+            p = np.zeros((i, i), dtype=int)
+
+            for actions in episodes:
+                np.add.at(p, (actions[:-1], actions[1:]), 1)
+
+            p[0, 0] = 0
+
+            a, b = np.unravel_index(p.argmax(), p.shape)
+            self.mappings.append(bytes([a, b]))
+            self.pattern_length.append(self.pattern_length[a] + self.pattern_length[b])
+
+            for j in range(len(episodes)):
+                action_str = episodes[j].tobytes()
+                action_str = action_str.replace(bytes([a, b]), bytes([i]))
+                episodes[j] = np.frombuffer(action_str, dtype=np.ubyte)
+
+        print('Mappings:', self.mappings)
+
+        frac = np.mean([
+            len(episode) / original_len
+            for episode, original_len in zip(episodes, original_lengths)
+        ])
+        print('Reduced size by', 1 / frac)
+
+        self.patterns = [re.compile(mapping) for mapping in self.mappings]
+
+    def __call__(self, batch: Batch, sequence_length: int):
+        batch_size = len(batch['actions'])
+        for i in range(batch_size):
+            action_str = batch['actions'][i].numpy().astype(np.ubyte).tobytes()
+
+            for token, pattern in enumerate(self.patterns):
+                if token < self.orig_vocab_size: continue
+                action_str = re.sub(pattern, bytes([token]), action_str)
+
+            action_str = action_str[:sequence_length]
+            actions = torch.from_numpy(np.frombuffer(action_str, dtype=np.ubyte))
+            batch['actions'][i, :sequence_length] = actions
+
+        batch['actions'] = batch['actions'][:, :sequence_length]
+
+        def zero_pad(x):
+            return torch.cat([torch.zeros_like(x[:, :1]), x], dim=-1)
+
+        lut = torch.LongTensor(self.pattern_length)
+        indices = zero_pad(lut[batch['actions']].cumsum(dim=-1))
+
+        for i in range(batch_size):
+            batch['observations'][i, :sequence_length] = batch['observations'][i, indices[i, :-1]]
+
+        agg_rewards = zero_pad(batch['rewards'].cumsum(dim=-1))
+
+        for i in range(batch_size):
+            batch['rewards'][i, :sequence_length] = (
+                agg_rewards[i, indices[i, 1:]] -
+                agg_rewards[i, indices[i, :-1]]
+            )
+
+        agg_ends = zero_pad(batch['ends'].cumsum(dim=-1))
+
+        for i in range(batch_size):
+            batch['ends'][i, :sequence_length] = (
+                agg_ends[i, indices[i, :-1]] != agg_ends[i, indices[i, 1:]]
+            )
+
+        for k in batch.keys():
+            batch[k] = batch[k][:, :sequence_length]
+
+        return batch
 
 @dataclass
 class WorldModelOutput:
