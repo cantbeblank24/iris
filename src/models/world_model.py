@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
-import re
+import random
 
 from einops import rearrange
 import torch
@@ -18,37 +18,46 @@ from utils import init_weights, LossWithIntermediateLosses
 
 
 class EpisodeSplitter:
-    def __init__(self, orig_vocab_size: int, vocab_size: int = None):
+    def __init__(self, orig_vocab_size: int):
         self.orig_vocab_size = orig_vocab_size
-        self.vocab_size = vocab_size if vocab_size is not None else 2 * orig_vocab_size
-
-    def init_mappings(self, dataset):
-        episodes = [
-            batch['actions'].squeeze().numpy().astype(np.ubyte)
-            for batch in dataset.traverse(1, 32)
-        ]
-
-        original_lengths = [len(episode) for episode in episodes]
-
         self.mappings = [bytes([i]) for i in range(self.orig_vocab_size)]
         self.pattern_length = [1 for _ in range(self.orig_vocab_size)]
 
-        for i in range(self.orig_vocab_size, self.vocab_size):
-            p = np.zeros((i, i), dtype=int)
+    @property
+    def vocab_size(self):
+        return len(self.mappings)
 
-            for actions in episodes:
-                np.add.at(p, (actions[:-1], actions[1:]), 1)
+    def extend_vocab(self, dataset):
+        def actions_from_batch(batch):
+            action_str = batch['actions'].squeeze().numpy().astype(np.ubyte).tobytes()
+            action_str = self.transform_actions(action_str)
+            return np.frombuffer(action_str, dtype=np.ubyte)
 
-            p[0, 0] = 0
+        episodes = [actions_from_batch(batch) for batch in dataset.traverse(1, 32)]
 
-            a, b = np.unravel_index(p.argmax(), p.shape)
-            self.mappings.append(bytes([a, b]))
-            self.pattern_length.append(self.pattern_length[a] + self.pattern_length[b])
+        original_lengths = [len(episode) for episode in episodes]
 
-            for j in range(len(episodes)):
-                action_str = episodes[j].tobytes()
-                action_str = action_str.replace(bytes([a, b]), bytes([i]))
-                episodes[j] = np.frombuffer(action_str, dtype=np.ubyte)
+        print('\'Training\' splitter on', sum(original_lengths), 'actions')
+
+        i = self.vocab_size
+
+        p = np.zeros((i, i), dtype=int)
+
+        for actions in episodes:
+            np.add.at(p, (actions[:-1], actions[1:]), 1)
+
+        p[0, :] = 0
+        p[:, 0] = 0
+        p[self.orig_vocab_size:, self.orig_vocab_size:] = 0
+
+        a, b = np.unravel_index(p.argmax(), p.shape)
+        self.mappings.append(bytes([a, b]))
+        self.pattern_length.append(self.pattern_length[a] + self.pattern_length[b])
+
+        for j in range(len(episodes)):
+            action_str = episodes[j].tobytes()
+            action_str = action_str.replace(bytes([a, b]), bytes([i]))
+            episodes[j] = np.frombuffer(action_str, dtype=np.ubyte)
 
         print('Mappings:', self.mappings)
 
@@ -56,24 +65,45 @@ class EpisodeSplitter:
             len(episode) / original_len
             for episode, original_len in zip(episodes, original_lengths)
         ])
-        print('Reduced size by', 1 / frac)
+        print('Approx size reduction: ', 1 / frac)
 
-        self.patterns = [re.compile(mapping) for mapping in self.mappings]
+    def transform_actions(self, action_str):
+        for token, mapping in enumerate(self.mappings):
+            if token < self.orig_vocab_size: continue
+            action_str = action_str.replace(mapping, bytes([token]))
 
-    def __call__(self, batch: Batch, sequence_length: int):
+        return action_str
+
+    def __call__(
+        self,
+        batch: Batch,
+        sequence_length: int,
+        sample_from_start: bool = True,
+        keep_some: bool = False,
+    ):
         batch_size = len(batch['actions'])
+
+        lengths = torch.zeros((batch_size,), dtype=int)
+
         for i in range(batch_size):
             action_str = batch['actions'][i].numpy().astype(np.ubyte).tobytes()
 
-            for token, pattern in enumerate(self.patterns):
-                if token < self.orig_vocab_size: continue
-                action_str = re.sub(pattern, bytes([token]), action_str)
+            start = random.randint(0, len(action_str) - 1) if keep_some else 0
+            end = random.randint(start, len(action_str)) if keep_some else 0
 
-            action_str = action_str[:sequence_length]
+            action_str = (
+                self.transform_actions(action_str[:start]) +
+                action_str[start:end] +
+                self.transform_actions(action_str[end:])
+            )
+
             actions = torch.from_numpy(np.frombuffer(action_str, dtype=np.ubyte))
-            batch['actions'][i, :sequence_length] = actions
 
-        batch['actions'] = batch['actions'][:, :sequence_length]
+            lengths[i] = len(actions)
+            assert lengths[i] > sequence_length
+
+            batch['actions'][i] = -1
+            batch['actions'][i, :lengths[i]] = actions
 
         def zero_pad(x):
             return torch.cat([torch.zeros_like(x[:, :1]), x], dim=-1)
@@ -81,15 +111,33 @@ class EpisodeSplitter:
         lut = torch.LongTensor(self.pattern_length)
         indices = zero_pad(lut[batch['actions']].cumsum(dim=-1))
 
+        if sample_from_start:
+            start = torch.zeros_like(lengths)
+            stop = torch.full_like(lengths, sequence_length)
+        else:
+            start = lengths - sequence_length
+            stop = lengths
+
+        actions = torch.zeros((batch_size, sequence_length), dtype=int)
+        final_indices = torch.zeros((batch_size, sequence_length + 1), dtype=int)
+
+        for i in range(batch_size):
+            actions[i] = batch['actions'][i, start[i]:stop[i]]
+            assert not (actions[i] == -1).any()
+            final_indices[i] = indices[i, start[i]:stop[i] + 1]
+
+        batch['actions'] = actions
+        indices = final_indices
+
         for i in range(batch_size):
             batch['observations'][i, :sequence_length] = batch['observations'][i, indices[i, :-1]]
+            batch['mask_padding'][i, :sequence_length] = batch['mask_padding'][i, indices[i, :-1]]
 
         agg_rewards = zero_pad(batch['rewards'].cumsum(dim=-1))
 
         for i in range(batch_size):
             batch['rewards'][i, :sequence_length] = (
-                agg_rewards[i, indices[i, 1:]] -
-                agg_rewards[i, indices[i, :-1]]
+                agg_rewards[i, indices[i, 1:]] - agg_rewards[i, indices[i, :-1]]
             )
 
         agg_ends = zero_pad(batch['ends'].cumsum(dim=-1))
@@ -103,6 +151,15 @@ class EpisodeSplitter:
             batch[k] = batch[k][:, :sequence_length]
 
         return batch
+
+    def decode_action(self, action):
+        if action < self.orig_vocab_size:
+            return [action]
+        else:
+            return sum(
+                (self.decode_action(subaction) for subaction in self.mappings[action]),
+                start=[],
+            )
 
 @dataclass
 class WorldModelOutput:

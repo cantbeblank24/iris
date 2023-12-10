@@ -124,6 +124,7 @@ class ActorCritic(nn.Module):
         gamma: float,
         lambda_: float,
         entropy_weight: float,
+        step_sizes: torch.LongTensor,
         **kwargs: Any,
     ) -> LossWithIntermediateLosses:
         assert not self.use_original_obs
@@ -142,14 +143,21 @@ class ActorCritic(nn.Module):
 
         d = Categorical(logits=outputs.logits_actions[:, :-1])
         log_probs = d.log_prob(outputs.actions[:, :-1])
-        loss_actions = -1 * (log_probs * (lambda_returns - values.detach())).mean()
-        loss_entropy = -entropy_weight * d.entropy().mean()
+        loss_actions = -(log_probs * (lambda_returns - values.detach())).mean()
+
+        step_size = step_sizes[outputs.actions[:, :-1]]
+        loss_step_size = -1e-3 * (log_probs * (step_size - 1)).mean()
+
+        entropy = d.entropy()
+
+        loss_entropy = -entropy_weight * entropy.mean()
         loss_values = F.mse_loss(values, lambda_returns)
 
         return LossWithIntermediateLosses(
             loss_actions=loss_actions,
             loss_values=loss_values,
             loss_entropy=loss_entropy,
+            # loss_step_size=loss_step_size,
         )
 
     def imagine(

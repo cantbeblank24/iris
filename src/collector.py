@@ -87,6 +87,7 @@ class Collector:
                 1,
             )
 
+        agent.queue = []
         agent.actor_critic.reset(
             n=self.env.num_envs,
             burnin_observations=burnin_obs_rec,
@@ -157,6 +158,7 @@ class Collector:
 
                 self.obs = self.env.reset()
                 self.episode_ids = [None] * self.env.num_envs
+                agent.queue = []
                 agent.actor_critic.reset(n=self.env.num_envs)
                 observations, actions, rewards, dones = [], [], [], []
 

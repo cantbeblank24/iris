@@ -41,6 +41,7 @@ class AgentEnv:
         self.obs = (
             self._to_tensor(obs) if isinstance(self.env, SingleProcessEnv) else obs
         )
+        self.agent.queue = []
         self.agent.actor_critic.reset(1)
         self._t = 0
         self._return = 0

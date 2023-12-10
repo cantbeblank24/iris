@@ -1,5 +1,6 @@
 from functools import partial
 from pathlib import Path
+import pickle
 
 import hydra
 from hydra.utils import instantiate
@@ -10,7 +11,7 @@ from agent import Agent
 from envs import SingleProcessEnv, WorldModelEnv
 from game import AgentEnv, EpisodeReplayEnv, Game
 from models.actor_critic import ActorCritic
-from models.world_model import WorldModel
+from models.world_model import WorldModel, EpisodeSplitter
 
 
 @hydra.main(config_path="../config", config_name="trainer")
@@ -41,15 +42,21 @@ def main(cfg: DictConfig):
 
     else:
         tokenizer = instantiate(cfg.tokenizer)
+
+        try:
+            splitter = pickle.load(open("checkpoints/splitter.pkl", 'rb'))
+        except:
+            splitter = EpisodeSplitter(test_env.num_actions)
+
         world_model = WorldModel(
             obs_vocab_size=tokenizer.vocab_size,
-            act_vocab_size=test_env.num_actions,
+            act_vocab_size=splitter.vocab_size,
             config=instantiate(cfg.world_model),
         )
         actor_critic = ActorCritic(
-            **cfg.actor_critic, act_vocab_size=test_env.num_actions
+            **cfg.actor_critic, act_vocab_size=splitter.vocab_size
         )
-        agent = Agent(tokenizer, world_model, actor_critic).to(device)
+        agent = Agent(tokenizer, world_model, actor_critic, splitter).to(device)
         agent.load(Path("checkpoints/last.pt"), device)
 
         if cfg.mode == "play_in_world_model":

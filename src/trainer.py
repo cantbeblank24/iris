@@ -5,6 +5,7 @@ import shutil
 import sys
 import time
 from typing import Any, Dict, Optional, Tuple
+import pickle
 
 import hydra
 from hydra.utils import instantiate
@@ -100,17 +101,19 @@ class Trainer:
         assert self.cfg.training.should or self.cfg.evaluation.should
         env = train_env if self.cfg.training.should else test_env
 
-        self.episode_splitter = EpisodeSplitter(env.num_actions)
-
+        splitter = EpisodeSplitter(env.num_actions)
         tokenizer = instantiate(cfg.tokenizer)
 
         world_model = WorldModel(
             obs_vocab_size=tokenizer.vocab_size,
-            act_vocab_size=self.episode_splitter.vocab_size,
+            act_vocab_size=splitter.vocab_size,
             config=instantiate(cfg.world_model),
         )
-        actor_critic = ActorCritic(**cfg.actor_critic, act_vocab_size=env.num_actions)
-        self.agent = Agent(tokenizer, world_model, actor_critic).to(self.device)
+        actor_critic = ActorCritic(
+            **cfg.actor_critic,
+            act_vocab_size=splitter.vocab_size,
+        )
+        self.agent = Agent(tokenizer, world_model, actor_critic, splitter).to(self.device)
         print(
             f"{sum(p.numel() for p in self.agent.tokenizer.parameters())} parameters in agent.tokenizer"
         )
@@ -137,7 +140,7 @@ class Trainer:
             self.agent.load(**cfg.initialization, device=self.device)
 
         if cfg.common.resume:
-            self.load_checkpoint()
+            self.load_checkpoint(env.num_actions)
 
     def run(self) -> None:
         for epoch in range(self.start_epoch, 1 + self.cfg.common.epochs):
@@ -191,8 +194,9 @@ class Trainer:
         self.agent.tokenizer.eval()
 
         if epoch > cfg_world_model.start_after_epochs:
-            if self.episode_splitter.mappings is None:
-                self.episode_splitter.init_mappings(self.train_dataset)
+            if epoch == cfg_world_model.start_after_epochs + 1:
+                for i in range(8):
+                    self.agent.extend_vocab(self.train_dataset)
 
             metrics_world_model = self.train_component(
                 self.agent.world_model,
@@ -200,12 +204,17 @@ class Trainer:
                 sequence_length=self.cfg.common.sequence_length,
                 sample_from_start=True,
                 tokenizer=self.agent.tokenizer,
-                splitter=self.episode_splitter,
+                splitter=self.agent.splitter,
+                keep_some=True,
                 **cfg_world_model,
             )
         self.agent.world_model.eval()
 
         if epoch > cfg_actor_critic.start_after_epochs:
+            if epoch == cfg_actor_critic.start_after_epochs + 1:
+                for i in range(8):
+                    self.agent.extend_actor_vocab()
+
             metrics_actor_critic = self.train_component(
                 self.agent.actor_critic,
                 self.optimizer_actor_critic,
@@ -213,6 +222,7 @@ class Trainer:
                 sample_from_start=False,
                 tokenizer=self.agent.tokenizer,
                 world_model=self.agent.world_model,
+                splitter=self.agent.splitter,
                 **cfg_actor_critic,
             )
         self.agent.actor_critic.eval()
@@ -237,6 +247,7 @@ class Trainer:
         sequence_length: int,
         sample_from_start: bool,
         splitter: EpisodeSplitter,
+        keep_some: bool = False,
         **kwargs_loss: Any,
     ) -> Dict[str, float]:
         loss_total_epoch = 0.0
@@ -248,13 +259,20 @@ class Trainer:
             optimizer.zero_grad()
             for _ in range(grad_acc_steps):
                 batch = self.train_dataset.sample_batch(
-                    batch_num_samples, 3 * sequence_length, sample_from_start
+                    batch_num_samples, 4 * sequence_length, sample_from_start
                 )
-                batch = splitter(batch, sequence_length)
+                batch = splitter(batch, sequence_length, sample_from_start, keep_some)
 
                 batch = self._to_device(batch)
 
-                losses = component.compute_loss(batch, **kwargs_loss) / grad_acc_steps
+                step_sizes = torch.Tensor(splitter.pattern_length).to(self.agent.device)
+
+                losses = component.compute_loss(
+                    batch,
+                    **kwargs_loss,
+                    step_sizes=step_sizes,
+                ) / grad_acc_steps
+
                 loss_total_step = losses.loss_total
                 loss_total_step.backward()
                 loss_total_epoch += loss_total_step.item() / steps_per_epoch
@@ -296,7 +314,7 @@ class Trainer:
                 cfg_world_model.batch_num_samples,
                 sequence_length=self.cfg.common.sequence_length,
                 tokenizer=self.agent.tokenizer,
-                splitter=self.episode_splitter,
+                splitter=self.agent.splitter,
             )
 
         if epoch > cfg_actor_critic.start_after_epochs:
@@ -331,7 +349,7 @@ class Trainer:
 
         steps = 0
         pbar = tqdm(desc=f"Evaluating {str(component)}", file=sys.stdout)
-        for batch in self.test_dataset.traverse(batch_num_samples, 3 * sequence_length):
+        for batch in self.test_dataset.traverse(batch_num_samples, 4 * sequence_length):
             batch = splitter(batch, sequence_length)
 
             batch = self._to_device(batch)
@@ -396,6 +414,9 @@ class Trainer:
 
     def _save_checkpoint(self, epoch: int, save_agent_only: bool) -> None:
         torch.save(self.agent.state_dict(), self.ckpt_dir / "last.pt")
+
+        pickle.dump(self.agent.splitter, open(self.ckpt_dir / "splitter.pkl", 'wb'))
+        
         if not save_agent_only:
             torch.save(epoch, self.ckpt_dir / "epoch.pt")
             torch.save(
@@ -425,19 +446,26 @@ class Trainer:
         self._save_checkpoint(epoch, save_agent_only)
         shutil.rmtree(tmp_checkpoint_dir)
 
-    def load_checkpoint(self) -> None:
+    def load_checkpoint(self, num_actions) -> None:
         assert self.ckpt_dir.is_dir()
         self.start_epoch = torch.load(self.ckpt_dir / "epoch.pt") + 1
+        self.train_dataset.load_disk_checkpoint(self.ckpt_dir / "dataset")
+
+        try:
+            self.agent.splitter = pickle.load(open(self.ckpt_dir / "splitter.pkl", 'rb'))
+        except:
+            self.agent.splitter = EpisodeSplitter(num_actions)
+
         self.agent.load(self.ckpt_dir / "last.pt", device=self.device)
         ckpt_opt = torch.load(self.ckpt_dir / "optimizer.pt", map_location=self.device)
         self.optimizer_tokenizer.load_state_dict(ckpt_opt["optimizer_tokenizer"])
         self.optimizer_world_model.load_state_dict(ckpt_opt["optimizer_world_model"])
         self.optimizer_actor_critic.load_state_dict(ckpt_opt["optimizer_actor_critic"])
-        self.train_dataset.load_disk_checkpoint(self.ckpt_dir / "dataset")
         if self.cfg.evaluation.should:
-            self.test_dataset.num_seen_episodes = torch.load(
-                self.ckpt_dir / "num_seen_episodes_test_dataset.pt"
-            )
+            ...
+            # self.test_dataset.num_seen_episodes = torch.load(
+            #     self.ckpt_dir / "num_seen_episodes_test_dataset.pt"
+            # )
         print(
             f"Successfully loaded model, optimizer and {len(self.train_dataset)} episodes from {self.ckpt_dir.absolute()}."
         )
