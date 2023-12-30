@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import torch
@@ -25,6 +26,8 @@ class Agent(nn.Module):
         self.splitter = splitter
 
         self.queue = []
+
+        self.raw_actions = True
 
     @property
     def device(self):
@@ -78,6 +81,10 @@ class Agent(nn.Module):
             new_layer.weight[:prev_size] = old_layer.weight
             new_layer.bias[:prev_size] = old_layer.bias
 
+            j = self.splitter.mappings[prev_size][0]
+            new_layer.weight[prev_size] = old_layer.weight[j]
+            new_layer.bias[prev_size] = old_layer.bias[j] - math.log(2)
+
     def act(
         self,
         obs: torch.FloatTensor,
@@ -103,9 +110,10 @@ class Agent(nn.Module):
                 else logits_actions.argmax(dim=-1)
             )
 
-            self.queue = self.splitter.decode_action(act_token)
-
-            print(self.queue)
+            if self.raw_actions:
+                self.queue = self.splitter.decode_action(act_token)
+            else:
+                self.queue = [act_token]
 
         raw_action = torch.LongTensor(self.queue[:1])
         self.queue = self.queue[1:]

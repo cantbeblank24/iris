@@ -56,9 +56,12 @@ class AgentEnv:
         )
         self._t += 1
         self._return += reward[0]
+
+        action_name = self.action_names[act[0]] if act[0] in self.action_names else "NA"
+
         info = {
             "timestep": self._t,
-            "action": self.action_names[act[0]],
+            "action": action_name,
             "return": self._return,
         }
         return obs, reward, done, info

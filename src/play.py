@@ -77,6 +77,7 @@ def main(cfg: DictConfig):
                 size[1] *= 3
 
         elif cfg.mode == "agent_in_world_model":
+            agent.raw_actions = False
             wm_env = WorldModelEnv(
                 tokenizer=agent.tokenizer,
                 world_model=agent.world_model,

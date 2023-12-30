@@ -48,7 +48,7 @@ class EpisodeSplitter:
 
         p[0, :] = 0
         p[:, 0] = 0
-        p[self.orig_vocab_size:, self.orig_vocab_size:] = 0
+        # p[self.orig_vocab_size:, self.orig_vocab_size:] = 0
 
         a, b = np.unravel_index(p.argmax(), p.shape)
         self.mappings.append(bytes([a, b]))
@@ -67,8 +67,16 @@ class EpisodeSplitter:
         ])
         print('Approx size reduction: ', 1 / frac)
 
-    def transform_actions(self, action_str):
-        for token, mapping in enumerate(self.mappings):
+    def transform_actions(self, action_str, sample=False):
+        mapping_pairs = list(enumerate(self.mappings))[self.orig_vocab_size:]
+
+        if sample:
+            n = len(mapping_pairs)
+            num_mappings = max(0, min(n, random.randint(0, int(2 * n)) - n // 2))
+            mapping_pairs = random.sample(mapping_pairs, num_mappings)
+            mapping_pairs = sorted(mapping_pairs)
+
+        for token, mapping in mapping_pairs:
             if token < self.orig_vocab_size: continue
             action_str = action_str.replace(mapping, bytes([token]))
 
@@ -79,28 +87,23 @@ class EpisodeSplitter:
         batch: Batch,
         sequence_length: int,
         sample_from_start: bool = True,
-        keep_some: bool = False,
+        sample_mappings: bool = False,
     ):
         batch_size = len(batch['actions'])
+
+        assert batch['actions'].max() < self.vocab_size
 
         lengths = torch.zeros((batch_size,), dtype=int)
 
         for i in range(batch_size):
             action_str = batch['actions'][i].numpy().astype(np.ubyte).tobytes()
-
-            start = random.randint(0, len(action_str) - 1) if keep_some else 0
-            end = random.randint(start, len(action_str)) if keep_some else 0
-
-            action_str = (
-                self.transform_actions(action_str[:start]) +
-                action_str[start:end] +
-                self.transform_actions(action_str[end:])
-            )
-
+            action_str = self.transform_actions(action_str, sample=sample_mappings)
             actions = torch.from_numpy(np.frombuffer(action_str, dtype=np.ubyte))
 
             lengths[i] = len(actions)
-            assert lengths[i] > sequence_length
+
+            if not lengths[i] > sequence_length:
+                breakpoint()
 
             batch['actions'][i] = -1
             batch['actions'][i, :lengths[i]] = actions
@@ -109,7 +112,7 @@ class EpisodeSplitter:
             return torch.cat([torch.zeros_like(x[:, :1]), x], dim=-1)
 
         lut = torch.LongTensor(self.pattern_length)
-        indices = zero_pad(lut[batch['actions']].cumsum(dim=-1))
+        offsets = zero_pad(lut[batch['actions']].cumsum(dim=-1))
 
         if sample_from_start:
             start = torch.zeros_like(lengths)
@@ -119,38 +122,38 @@ class EpisodeSplitter:
             stop = lengths
 
         actions = torch.zeros((batch_size, sequence_length), dtype=int)
-        final_indices = torch.zeros((batch_size, sequence_length + 1), dtype=int)
+        final_offsets = torch.zeros((batch_size, sequence_length + 1), dtype=int)
 
         for i in range(batch_size):
             actions[i] = batch['actions'][i, start[i]:stop[i]]
             assert not (actions[i] == -1).any()
-            final_indices[i] = indices[i, start[i]:stop[i] + 1]
+            final_offsets[i] = offsets[i, start[i]:stop[i] + 1]
 
         batch['actions'] = actions
-        indices = final_indices
+        offsets = final_offsets
 
         for i in range(batch_size):
-            batch['observations'][i, :sequence_length] = batch['observations'][i, indices[i, :-1]]
-            batch['mask_padding'][i, :sequence_length] = batch['mask_padding'][i, indices[i, :-1]]
+            batch['observations'][i, :sequence_length] = batch['observations'][i, offsets[i, :-1]]
+            batch['mask_padding'][i, :sequence_length] = batch['mask_padding'][i, offsets[i, :-1]]
 
         agg_rewards = zero_pad(batch['rewards'].cumsum(dim=-1))
 
         for i in range(batch_size):
             batch['rewards'][i, :sequence_length] = (
-                agg_rewards[i, indices[i, 1:]] - agg_rewards[i, indices[i, :-1]]
+                agg_rewards[i, offsets[i, 1:]] - agg_rewards[i, offsets[i, :-1]]
             )
 
         agg_ends = zero_pad(batch['ends'].cumsum(dim=-1))
 
         for i in range(batch_size):
             batch['ends'][i, :sequence_length] = (
-                agg_ends[i, indices[i, :-1]] != agg_ends[i, indices[i, 1:]]
+                agg_ends[i, offsets[i, :-1]] != agg_ends[i, offsets[i, 1:]]
             )
 
         for k in batch.keys():
             batch[k] = batch[k][:, :sequence_length]
 
-        return batch
+        return batch, offsets
 
     def decode_action(self, action):
         if action < self.orig_vocab_size:

@@ -6,6 +6,7 @@ import sys
 import time
 from typing import Any, Dict, Optional, Tuple
 import pickle
+from statistics import mean, stdev
 
 import hydra
 from hydra.utils import instantiate
@@ -14,16 +15,19 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 import wandb
+import matplotlib.pyplot as plt
 
 from agent import Agent
 from collector import Collector
 from envs import SingleProcessEnv, MultiProcessEnv
 from episode import Episode
 from make_reconstructions import make_reconstructions_from_batch
-from models.actor_critic import ActorCritic
+from models.actor_critic import ActorCritic, ImagineOutput
 from models.world_model import WorldModel, EpisodeSplitter
+from models.tokenizer import Tokenizer
 from utils import configure_optimizer, EpisodeDirManager, set_seed
-
+from dataset import Batch
+from envs.world_model_env import WorldModelEnv
 
 class Trainer:
     def __init__(self, cfg: DictConfig) -> None:
@@ -193,10 +197,14 @@ class Trainer:
             )
         self.agent.tokenizer.eval()
 
+        if epoch == 100:
+            for i in range(self.cfg.common.extra_tokens):
+                self.agent.extend_vocab(self.train_dataset)
+
         if epoch > cfg_world_model.start_after_epochs:
-            if epoch == cfg_world_model.start_after_epochs + 1:
-                for i in range(8):
-                    self.agent.extend_vocab(self.train_dataset)
+            # if epoch == cfg_world_model.start_after_epochs + 1:
+            #     for i in range(self.cfg.common.extra_tokens):
+            #         self.agent.extend_vocab(self.train_dataset)
 
             metrics_world_model = self.train_component(
                 self.agent.world_model,
@@ -212,7 +220,7 @@ class Trainer:
 
         if epoch > cfg_actor_critic.start_after_epochs:
             if epoch == cfg_actor_critic.start_after_epochs + 1:
-                for i in range(8):
+                for i in range(self.cfg.common.extra_tokens):
                     self.agent.extend_actor_vocab()
 
             metrics_actor_critic = self.train_component(
@@ -259,9 +267,9 @@ class Trainer:
             optimizer.zero_grad()
             for _ in range(grad_acc_steps):
                 batch = self.train_dataset.sample_batch(
-                    batch_num_samples, 4 * sequence_length, sample_from_start
+                    batch_num_samples, 8 * sequence_length, sample_from_start
                 )
-                batch = splitter(batch, sequence_length, sample_from_start, keep_some)
+                batch, _ = splitter(batch, sequence_length, sample_from_start, True)
 
                 batch = self._to_device(batch)
 
@@ -295,6 +303,8 @@ class Trainer:
 
     @torch.no_grad()
     def eval_agent(self, epoch: int) -> None:
+        if epoch < 100: return
+
         self.agent.eval()
 
         metrics_tokenizer, metrics_world_model = {}, {}
@@ -308,13 +318,22 @@ class Trainer:
                 self.agent.tokenizer, cfg_tokenizer.batch_num_samples, sequence_length=1
             )
 
-        if epoch > cfg_world_model.start_after_epochs:
-            metrics_world_model = self.eval_component(
+        if epoch >= cfg_world_model.start_after_epochs:
+            # metrics_world_model = self.eval_component(
+            #     self.agent.world_model,
+            #     cfg_world_model.batch_num_samples,
+            #     sequence_length=self.cfg.common.sequence_length,
+            #     tokenizer=self.agent.tokenizer,
+            #     splitter=self.agent.splitter,
+            # )
+
+            self.eval_horizon(
                 self.agent.world_model,
+                self.agent.tokenizer,
                 cfg_world_model.batch_num_samples,
                 sequence_length=self.cfg.common.sequence_length,
-                tokenizer=self.agent.tokenizer,
                 splitter=self.agent.splitter,
+                epoch=epoch,
             )
 
         if epoch > cfg_actor_critic.start_after_epochs:
@@ -335,6 +354,126 @@ class Trainer:
 
         return [metrics_tokenizer, metrics_world_model]
 
+    def imagine(
+        self,
+        batch: Batch,
+        world_model: WorldModel,
+        tokenizer: Tokenizer,
+        actions,
+        show_pbar: bool = False,
+    ) -> ImagineOutput:
+        horizon = actions.shape[1]
+
+        initial_observations = batch["observations"]
+        mask_padding = batch["mask_padding"]
+        assert initial_observations.ndim == 5 and initial_observations.shape[2:] == (
+            3,
+            64,
+            64,
+        )
+        assert mask_padding[:, -1].all()
+        device = initial_observations.device
+        wm_env = WorldModelEnv(tokenizer, world_model, device)
+
+        all_actions = []
+        all_logits_actions = []
+        all_values = []
+        all_rewards = []
+        all_ends = []
+        all_observations = []
+
+        burnin_observations = (
+            torch.clamp(
+                tokenizer.encode_decode(
+                    initial_observations[:, :-1],
+                    should_preprocess=True,
+                    should_postprocess=True,
+                ),
+                0,
+                1,
+            )
+            if initial_observations.size(1) > 1
+            else None
+        )
+
+        obs = wm_env.reset_from_initial_observations(initial_observations[:, -1])
+        for k in tqdm(
+            range(horizon), disable=not show_pbar, desc="Imagination", file=sys.stdout
+        ):
+            action_token = actions[:, k] 
+
+            obs, reward, done, _ = wm_env.step(
+                action_token, should_predict_next_obs=True
+            )
+
+            all_observations.append(obs)
+            all_rewards.append(torch.tensor(reward).reshape(-1, 1))
+            all_ends.append(torch.tensor(done).reshape(-1, 1))
+
+        return ImagineOutput(
+            observations=torch.stack(all_observations, dim=1),
+            actions=None,  # (B, T)
+            logits_actions=None,  # (B, T, #actions)
+            values=None,  # (B, T)
+            rewards=torch.cat(all_rewards, dim=1).to(device),  # (B, T)
+            ends=torch.cat(all_ends, dim=1).to(device),  # (B, T)
+        )
+
+    @torch.no_grad()
+    def eval_horizon(
+        self,
+        world_model: WorldModel,
+        tokenizer: Tokenizer,
+        batch_num_samples: int,
+        sequence_length: int,
+        splitter: EpisodeSplitter,
+        epoch: int,
+        **kwargs_loss: Any,
+    ) -> Dict[str, float]:
+        print("Evaluating horizon performance")
+
+        for batch in self.test_dataset.traverse(batch_num_samples, 16 * sequence_length):
+            batch, offsets = splitter(batch, 2 * sequence_length, sample_mappings=False)
+            batch = self._to_device(batch)
+
+            if not batch['mask_padding'].all():
+                continue
+
+            past = {k: v[:, :sequence_length] for k, v in batch.items()}                
+            future_actions = batch['actions'][:, -sequence_length-1:-1]
+
+            imagination = self.imagine(past, world_model, tokenizer, future_actions)
+
+            future_observations = batch['observations'][:, -sequence_length:]
+
+            future_observations = torch.clamp(
+                tokenizer.encode_decode(
+                    future_observations,
+                    should_preprocess=True,
+                    should_postprocess=True,
+                ),
+                0,
+                1,
+            )
+
+            n, m, *_ = future_observations.shape
+
+            with open('results.csv', 'a') as f:
+                for i in range(n):
+                    for j in range(m):
+                        loss = torch.abs(
+                            future_observations[i, j] - imagination.observations[i, j]
+                        ).mean()
+
+                        print(
+                            f'{self.cfg.env.train.id}, \
+                            {self.cfg.common.extra_tokens}, \
+                            {epoch}, \
+                            {offsets[i][j]}, \
+                            {loss}',
+                            file=f
+                        )
+
     @torch.no_grad()
     def eval_component(
         self,
@@ -349,9 +488,8 @@ class Trainer:
 
         steps = 0
         pbar = tqdm(desc=f"Evaluating {str(component)}", file=sys.stdout)
-        for batch in self.test_dataset.traverse(batch_num_samples, 4 * sequence_length):
-            batch = splitter(batch, sequence_length)
-
+        for batch in self.test_dataset.traverse(batch_num_samples, 8 * sequence_length):
+            batch, _ = splitter(batch, sequence_length, sample_mappings=True)
             batch = self._to_device(batch)
 
             losses = component.compute_loss(batch, **kwargs_loss)

@@ -145,8 +145,8 @@ class ActorCritic(nn.Module):
         log_probs = d.log_prob(outputs.actions[:, :-1])
         loss_actions = -(log_probs * (lambda_returns - values.detach())).mean()
 
-        step_size = step_sizes[outputs.actions[:, :-1]]
-        loss_step_size = -1e-3 * (log_probs * (step_size - 1)).mean()
+        # step_size = step_sizes[outputs.actions[:, :-1]]
+        # loss_step_size = -1e-3 * (log_probs * (step_size - 1)).mean()
 
         entropy = d.entropy()
 

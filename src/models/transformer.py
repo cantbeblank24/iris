@@ -121,7 +121,9 @@ class SelfAttention(nn.Module):
         B, T, C = x.size()
         if kv_cache is not None:
             b, nh, L, c = kv_cache.shape
-            assert nh == self.num_heads and b == B and c * nh == C
+            if not (nh == self.num_heads and b == B and c * nh == C):
+                breakpoint()
+                assert False
         else:
             L = 0
 
