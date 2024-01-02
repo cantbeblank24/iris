@@ -28,8 +28,6 @@ class Episode:
             == len(self.mask_padding)
         )
 
-        assert self.actions.max() < 4
-
         if self.ends.sum() > 0:
             idx_end = torch.argmax(self.ends) + 1
             self.observations = self.observations[:idx_end]

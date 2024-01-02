@@ -7,7 +7,7 @@ defaults:
   - datasets: default
 
 wandb:
-  mode: online
+  mode: offline
   project: iris
   entity: null
   name: null
@@ -22,13 +22,13 @@ initialization:
   load_actor_critic: True
 
 common:
-  epochs: 110
+  epochs: 280
   device: cuda:0
   do_checkpoint: True
   seed: 0
   sequence_length: ${world_model.max_blocks}
   resume: False # set by resume.sh script only.
-  extra_tokens: 0
+  extra_tokens: 4
 
 collection:
   train:
@@ -65,15 +65,15 @@ training:
     grad_acc_steps: 2
     max_grad_norm: 10.0
     weight_decay: 0.01
-    start_after_epochs: 100
+    start_after_epochs: 200
     steps_per_epoch: 200
   actor_critic:
     batch_num_samples: 32
     grad_acc_steps: 2
     max_grad_norm: 10.0
-    start_after_epochs: 2000
-    steps_per_epoch: 2
-    imagine_horizon: ${common.sequence_length}
+    start_after_epochs: 230
+    steps_per_epoch: 200
+    imagine_horizon: 10
     burn_in: 20
     gamma: 0.995
     lambda_: 0.95
@@ -81,7 +81,7 @@ training:
 
 evaluation:
   should: True
-  every: 5
+  every: 10
   tokenizer:
     batch_num_samples: ${training.tokenizer.batch_num_samples}
     start_after_epochs: ${training.tokenizer.start_after_epochs}

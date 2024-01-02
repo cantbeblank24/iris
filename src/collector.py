@@ -29,8 +29,6 @@ class Collector:
         self.episode_ids = [None] * self.env.num_envs
         self.heuristic = RandomHeuristic(self.env.num_actions)
 
-        assert self.env.num_actions <= 4
-
     @torch.no_grad()
     def collect(
         self,

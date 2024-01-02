@@ -159,7 +159,11 @@ class Trainer:
                     )
                 to_log += self.train_agent(epoch)
 
-            if self.cfg.evaluation.should and (epoch % self.cfg.evaluation.every == 0):
+            if (
+                self.cfg.evaluation.should and
+                epoch % self.cfg.evaluation.every == 0 and
+                epoch >= 200
+            ):
                 self.test_dataset.clear()
                 to_log += self.test_collector.collect(
                     self.agent, epoch, **self.cfg.collection.test.config
@@ -197,7 +201,7 @@ class Trainer:
             )
         self.agent.tokenizer.eval()
 
-        if epoch == 100:
+        if epoch == 200:
             for i in range(self.cfg.common.extra_tokens):
                 self.agent.extend_vocab(self.train_dataset)
 
@@ -303,8 +307,6 @@ class Trainer:
 
     @torch.no_grad()
     def eval_agent(self, epoch: int) -> None:
-        if epoch < 100: return
-
         self.agent.eval()
 
         metrics_tokenizer, metrics_world_model = {}, {}
@@ -326,15 +328,16 @@ class Trainer:
             #     tokenizer=self.agent.tokenizer,
             #     splitter=self.agent.splitter,
             # )
+            ...
 
-            self.eval_horizon(
-                self.agent.world_model,
-                self.agent.tokenizer,
-                cfg_world_model.batch_num_samples,
-                sequence_length=self.cfg.common.sequence_length,
-                splitter=self.agent.splitter,
-                epoch=epoch,
-            )
+        self.eval_horizon(
+            self.agent.world_model,
+            self.agent.tokenizer,
+            cfg_world_model.batch_num_samples,
+            sequence_length=self.cfg.common.sequence_length,
+            splitter=self.agent.splitter,
+            epoch=epoch,
+        )
 
         if epoch > cfg_actor_critic.start_after_epochs:
             self.inspect_imagination(epoch)
@@ -452,9 +455,10 @@ class Trainer:
                     should_preprocess=True,
                     should_postprocess=True,
                 ),
-                0,
-                1,
+                0, 1,
             )
+
+            offsets = offsets[:, sequence_length:] - offsets[:, sequence_length - 1][:, None]
 
             n, m, *_ = future_observations.shape
 
@@ -467,7 +471,7 @@ class Trainer:
 
                         print(
                             f'{self.cfg.env.train.id}, \
-                            {self.cfg.common.extra_tokens}, \
+                            {splitter.vocab_size}, \
                             {epoch}, \
                             {offsets[i][j]}, \
                             {loss}',

@@ -52,7 +52,7 @@ class Agent(nn.Module):
                 extract_state_dict(agent_state_dict, "world_model")
             )
         if load_actor_critic:
-            self.actor_critic.actor_linear = nn.Linear(512, self.splitter.vocab_size).to(self.device)
+            # self.actor_critic.actor_linear = nn.Linear(512, self.splitter.vocab_size).to(self.device)
             self.actor_critic.load_state_dict(
                 extract_state_dict(agent_state_dict, "actor_critic")
             )
@@ -71,6 +71,8 @@ class Agent(nn.Module):
             new_embedding.weight[:prev_size] = old_embedding.weight[:prev_size]
 
     def extend_actor_vocab(self):
+        print("Extending actor vocab")
+
         old_layer = self.actor_critic.actor_linear
         prev_size = old_layer.weight.shape[0]
 
@@ -83,7 +85,7 @@ class Agent(nn.Module):
 
             j = self.splitter.mappings[prev_size][0]
             new_layer.weight[prev_size] = old_layer.weight[j]
-            new_layer.bias[prev_size] = old_layer.bias[j] - math.log(2)
+            new_layer.bias[prev_size] = old_layer.bias[j]
 
     def act(
         self,
@@ -114,6 +116,8 @@ class Agent(nn.Module):
                 self.queue = self.splitter.decode_action(act_token)
             else:
                 self.queue = [act_token]
+
+            print(self.queue)
 
         raw_action = torch.LongTensor(self.queue[:1])
         self.queue = self.queue[1:]

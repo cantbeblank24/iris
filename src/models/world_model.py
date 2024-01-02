@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from dataset import Batch
 from .kv_caching import KeysValues
@@ -72,7 +73,8 @@ class EpisodeSplitter:
 
         if sample:
             n = len(mapping_pairs)
-            num_mappings = max(0, min(n, random.randint(0, int(2 * n)) - n // 2))
+            num_mappings = min(n, random.randint(0, int(1.5 * n)))
+
             mapping_pairs = random.sample(mapping_pairs, num_mappings)
             mapping_pairs = sorted(mapping_pairs)
 
