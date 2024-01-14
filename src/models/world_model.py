@@ -51,7 +51,12 @@ class EpisodeSplitter:
         p[:, 0] = 0
         # p[self.orig_vocab_size:, self.orig_vocab_size:] = 0
 
+        if p.max() < 200:
+            print('Not enough actions to extend action set')
+            return
+
         a, b = np.unravel_index(p.argmax(), p.shape)
+
         self.mappings.append(bytes([a, b]))
         self.pattern_length.append(self.pattern_length[a] + self.pattern_length[b])
 

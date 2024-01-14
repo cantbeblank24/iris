@@ -154,7 +154,6 @@ class ActorCritic(nn.Module):
             loss_actions=loss_actions,
             loss_values=loss_values,
             loss_entropy=loss_entropy,
-            # loss_step_size=loss_step_size,
         )
 
     def imagine(

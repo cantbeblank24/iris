@@ -52,7 +52,7 @@ class Agent(nn.Module):
                 extract_state_dict(agent_state_dict, "world_model")
             )
         if load_actor_critic:
-            # self.actor_critic.actor_linear = nn.Linear(512, self.splitter.vocab_size).to(self.device)
+            self.actor_critic.actor_linear = nn.Linear(512, self.splitter.vocab_size).to(self.device)
             self.actor_critic.load_state_dict(
                 extract_state_dict(agent_state_dict, "actor_critic")
             )
