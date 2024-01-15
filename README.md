@@ -20,7 +20,7 @@ tokenization logic and adding the necessary preprocessing step.
 Data for results in sections 3.1 and 3.2 can be collected with the `collect.sh` script and
 then plotted using `python3 plot_results.py results.csv`.
 
-Results from 3.3 can be obtained by running the following commands (results are collected
+Results from 3.3 can be obtained by running the following commands (scores are collected
 on WandB).
 ```
 python src/main.py env.train.id=BattleZoneNoFrameskip-v4 common.extra_tokens=5
