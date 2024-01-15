@@ -108,8 +108,7 @@ class EpisodeSplitter:
 
             lengths[i] = len(actions)
 
-            if not lengths[i] > sequence_length:
-                breakpoint()
+            # assert lengths[i] >= sequence_length
 
             batch['actions'][i] = -1
             batch['actions'][i, :lengths[i]] = actions
