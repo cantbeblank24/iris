@@ -6,7 +6,7 @@ setup the environment. We had problems getting the codebase to work with newer P
 versions, 3.8.10 worked for us.
 
 After setting up the environment according to https://github.com/eloialonso/iris we only
-require that models are downloaded from
+require that pretrained models are downloaded from
 https://github.com/eloialonso/iris_pretrained_models.
 
 ## Code
