@@ -117,29 +117,7 @@ class Agent(nn.Module):
             else:
                 self.queue = [act_token]
 
-            print(self.queue)
-
         raw_action = torch.LongTensor(self.queue[:1])
         self.queue = self.queue[1:]
 
         return raw_action
-
-        # input_ac = (
-        #     obs
-        #     if self.actor_critic.use_original_obs
-        #     else torch.clamp(
-        #         self.tokenizer.encode_decode(
-        #             obs, should_preprocess=True, should_postprocess=True
-        #         ),
-        #         0,
-        #         1,
-        #     )
-        # )
-        # logits_actions = self.actor_critic(input_ac).logits_actions[:, -1] / temperature
-        # act_token = (
-        #     Categorical(logits=logits_actions).sample()
-        #     if should_sample
-        #     else logits_actions.argmax(dim=-1)
-        # )
-
-        # return act_token

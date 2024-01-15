@@ -1,6 +1,7 @@
 set -e
 
 declare -a envs=(Breakout Qbert Pong Boxing MsPacman BattleZone)
+declare -a tokens=(0 4 8 16)
 
 epochs=215
 
@@ -20,6 +21,7 @@ do
             collection.test.config.temperature=1.0 \
             evaluation.every=${epochs} \
             wandb.mode=offline
+
         cat $(ls -t outputs/**/**/results.csv | head -n 1) >> results.csv
     done
 done

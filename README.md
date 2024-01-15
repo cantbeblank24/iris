@@ -3,15 +3,22 @@
 This repository contains the code for our DL HS23 group project. We refer to
 https://github.com/eloialonso/iris for an overview of the code base as well as how to
 setup the environment. We had problems getting the codebase to work with newer Python
-version and ended up using 3.8.
+versions, 3.8.10 worked for us.
+
+After setting up the environment according to https://github.com/eloialonso/iris we only
+require that models are downloaded from
+https://github.com/eloialonso/iris_pretrained_models.
+
+## Reproducing Results
 
 Data for results in sections 3.1 and 3.2 can be collected with the `collect.sh` script and
-then plotted using `python3 plot_results.py results.csv`. We obtained the results in
-section 3.3 by running the following commands (data is collected in WandB).
+then plotted using `python3 plot_results.py results.csv`.
 
-
+Results from 3.3 can be obtained by running the following commands (results are collected
+on WandB).
 ```
-python src/main.py env.train.id=BattleZoneNoFrameskip-v4 common.extra_tokens=0
 python src/main.py env.train.id=BattleZoneNoFrameskip-v4 common.extra_tokens=5
+# By setting extra_tokens to zero the original algorithm is retained
+python src/main.py env.train.id=BattleZoneNoFrameskip-v4 common.extra_tokens=0
 ```
 

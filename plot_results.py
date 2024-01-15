@@ -12,6 +12,7 @@ df = pd.concat([
 ])
 
 df['env'] = df['env'].str[:-14]
+
 df = df[df['env'].isin([
     'Pong', 'Breakout', 'BattleZone', 'Boxing', 'Qbert', 'MsPacman'
 ])]
@@ -39,18 +40,35 @@ occurrences = df.groupby(
 )
 
 df = df.join(occurrences, on=['env', 'step', 'tokens', 'epochs'])
-df = df[df['count'] > 15]
+df = df[df['count'] > 25]
 
-df = df[(df['epochs'] == 215) & ((df['tokens'] == 0) | (df['tokens'] == 8))]
+main_results = df[(df['epochs'] == 215) & ((df['tokens'] == 0) | (df['tokens'] == 8))]
 
 sns.relplot(
-    data=df, x='step', y='error', hue='approach',
+    data=main_results, x='step', y='error', hue='approach',
     palette="tab10",
     kind='line', col='env', col_wrap=3,
-    # alpha=0.4,
     err_kws={'alpha': 0.4},
     facet_kws={'sharey': False, 'sharex': False},
 )
 
 plt.subplots_adjust(hspace=0.2)
 plt.savefig("wm_results.png")
+plt.clf()
+
+action_scaling = pd.concat([
+    df[(df['epochs'] == 215) & (df['env'] == 'BattleZone')],
+    df[(df['epochs'] == 225) & (df['env'] == 'Breakout')],
+])
+action_scaling = action_scaling[action_scaling['tokens'] <= 16]
+
+sns.relplot(
+    data=action_scaling, x='step', y='error', hue='tokens',
+    palette="crest",
+    kind='line', col='env',
+    # err_kws={'alpha': 0.4},
+    facet_kws={'sharey': False, 'sharex': False},
+)
+
+plt.savefig("no_actions_results.png")
+plt.clf()

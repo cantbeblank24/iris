@@ -206,10 +206,6 @@ class Trainer:
                 self.agent.extend_vocab(self.train_dataset)
 
         if epoch > cfg_world_model.start_after_epochs:
-            # if epoch == cfg_world_model.start_after_epochs + 1:
-            #     for i in range(self.cfg.common.extra_tokens):
-            #         self.agent.extend_vocab(self.train_dataset)
-
             metrics_world_model = self.train_component(
                 self.agent.world_model,
                 self.optimizer_world_model,
@@ -277,12 +273,9 @@ class Trainer:
 
                 batch = self._to_device(batch)
 
-                step_sizes = torch.Tensor(splitter.pattern_length).to(self.agent.device)
-
                 losses = component.compute_loss(
                     batch,
                     **kwargs_loss,
-                    step_sizes=step_sizes,
                 ) / grad_acc_steps
 
                 loss_total_step = losses.loss_total
@@ -319,16 +312,6 @@ class Trainer:
             metrics_tokenizer = self.eval_component(
                 self.agent.tokenizer, cfg_tokenizer.batch_num_samples, sequence_length=1
             )
-
-        if epoch >= cfg_world_model.start_after_epochs:
-            # metrics_world_model = self.eval_component(
-            #     self.agent.world_model,
-            #     cfg_world_model.batch_num_samples,
-            #     sequence_length=self.cfg.common.sequence_length,
-            #     tokenizer=self.agent.tokenizer,
-            #     splitter=self.agent.splitter,
-            # )
-            ...
 
         self.eval_horizon(
             self.agent.world_model,
