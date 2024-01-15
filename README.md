@@ -9,6 +9,12 @@ After setting up the environment according to https://github.com/eloialonso/iris
 require that models are downloaded from
 https://github.com/eloialonso/iris_pretrained_models.
 
+## Code
+
+https://github.com/cantbeblank24/iris/compare/main...final gives a pretty good overview of
+our changes to the original iris code. These consist mainly of introducing the
+tokenization logic and adding the necessary preprocessing step.
+
 ## Reproducing Results
 
 Data for results in sections 3.1 and 3.2 can be collected with the `collect.sh` script and

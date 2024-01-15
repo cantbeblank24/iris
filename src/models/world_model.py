@@ -49,7 +49,6 @@ class EpisodeSplitter:
 
         p[0, :] = 0
         p[:, 0] = 0
-        # p[self.orig_vocab_size:, self.orig_vocab_size:] = 0
 
         if p.max() < 200:
             print('Not enough actions to extend action set')
